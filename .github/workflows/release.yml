@@ -39,8 +39,12 @@ jobs:
         run: |
           if (-not $env:TFG_UPDATE_SIGNING_KEY) { throw "Repository secret TFG_UPDATE_SIGNING_KEY is missing" }
           $file = Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe"
+          $pem = $env:TFG_UPDATE_SIGNING_KEY.Replace('\n', "`n")
+          $base64 = $pem -replace '-----BEGIN PRIVATE KEY-----', '' -replace '-----END PRIVATE KEY-----', '' -replace '\s', ''
+          $privateKey = [Convert]::FromBase64String($base64)
           $key = [System.Security.Cryptography.ECDsa]::Create()
-          $key.ImportFromPem($env:TFG_UPDATE_SIGNING_KEY)
+          $bytesRead = 0
+          $key.ImportPkcs8PrivateKey($privateKey, [ref]$bytesRead)
           $signature = $key.SignData(
             [System.IO.File]::ReadAllBytes($file.FullName),
             [System.Security.Cryptography.HashAlgorithmName]::SHA256,

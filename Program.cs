@@ -22,14 +22,13 @@ internal static class Program
             Console.WriteLine($"build=ok file={process.StartInfo.FileName}");
             return;
         }
-        if (args.Length == 2 && args[0].Equals("--verify-signature", StringComparison.OrdinalIgnoreCase))
+        if (args.Length == 3 && args[0].Equals("--verify-update", StringComparison.OrdinalIgnoreCase))
         {
-            var trusted = Authenticode.IsTrusted(args[1]);
-            Console.WriteLine($"trusted={trusted}");
-            Environment.ExitCode = trusted ? 0 : 1;
+            var valid = UpdateSignature.Verify(args[1], File.ReadAllBytes(args[2]));
+            Console.WriteLine($"signature={valid}");
+            Environment.ExitCode = valid ? 0 : 1;
             return;
         }
-
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm());
     }

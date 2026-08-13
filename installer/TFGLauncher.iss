@@ -1,4 +1,4 @@
-#define AppVersion "1.1.0"
+#define AppVersion "1.1.1"
 
 [Setup]
 AppId={{C9DBD20A-A7A0-43E9-889B-D10962E2CC9A}
@@ -18,10 +18,6 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=yes
 UninstallDisplayIcon={app}\TFG Launcher.exe
-#ifdef SignedBuild
-SignTool=tfgauthenticode
-SignedUninstaller=yes
-#endif
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -38,3 +34,10 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 [Run]
 Filename: "{app}\TFG Launcher.exe"; Description: "Запустить TFG Launcher"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\TFG Launcher.exe"; Flags: nowait; Check: IsSelfUpdate
+
+[Code]
+function IsSelfUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:TFGSELFUPDATE|0}') = '1';
+end;

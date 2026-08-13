@@ -11,7 +11,6 @@ using System.IO.Compression;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
@@ -125,12 +124,12 @@ internal sealed class LauncherService
         var update = new LauncherUpdate(
             version,
             launcher.GetProperty("installer_url").GetString() ?? "",
+            launcher.GetProperty("signature_url").GetString() ?? "",
             launcher.TryGetProperty("size", out var size) && size.TryGetInt64(out var bytes) ? bytes : 0,
-            launcher.GetProperty("sha256").GetString() ?? "",
-            launcher.GetProperty("signer_thumbprint").GetString() ?? "");
-        if (string.IsNullOrWhiteSpace(update.InstallerUrl) || string.IsNullOrWhiteSpace(update.Sha256) ||
-            string.IsNullOrWhiteSpace(update.SignerThumbprint) || update.Size <= 0)
-            throw new InvalidDataException($"Для обязательного обновления лаунчера {version} не опубликован подписанный установщик.");
+            launcher.GetProperty("sha256").GetString() ?? "");
+        if (!IsHttps(update.InstallerUrl) || !IsHttps(update.SignatureUrl) || string.IsNullOrWhiteSpace(update.Sha256) ||
+            update.Size <= 0)
+            throw new InvalidDataException($"Для обязательного обновления лаунчера {version} не опубликован установщик.");
         return update;
     }
 
@@ -145,26 +144,40 @@ internal sealed class LauncherService
             File.Delete(path);
             throw new InvalidDataException("Размер обновления лаунчера не совпал с манифестом.");
         }
-        if (!Authenticode.IsTrusted(path))
+        var signature = await DownloadSignatureAsync(update.SignatureUrl, token);
+        if (signature.Length is < 64 or > 256 || !UpdateSignature.Verify(path, signature))
         {
             File.Delete(path);
-            throw new InvalidDataException("Цифровая подпись обновления лаунчера недействительна.");
-        }
-        using var certificate = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
-        var actual = certificate.GetCertHashString(HashAlgorithmName.SHA256);
-        var expected = update.SignerThumbprint.Replace(" ", "", StringComparison.Ordinal);
-        if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-        {
-            File.Delete(path);
-            throw new InvalidDataException("Цифровая подпись обновления лаунчера не принадлежит доверенному издателю.");
+            throw new InvalidDataException("Криптографическая подпись обновления лаунчера недействительна.");
         }
         return path;
     }
 
+    private async Task<byte[]> DownloadSignatureAsync(string url, CancellationToken token)
+    {
+        using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token);
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength is > 256)
+            throw new InvalidDataException("Файл подписи обновления слишком большой.");
+        await using var source = await response.Content.ReadAsStreamAsync(token);
+        using var target = new MemoryStream(256);
+        var buffer = new byte[257];
+        int read;
+        while ((read = await source.ReadAsync(buffer, token)) > 0)
+        {
+            target.Write(buffer, 0, read);
+            if (target.Length > 256) throw new InvalidDataException("Файл подписи обновления слишком большой.");
+        }
+        return target.ToArray();
+    }
+
+    private static bool IsHttps(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps;
+
     public static void StartInstaller(string path) => Process.Start(new ProcessStartInfo
     {
         FileName = path,
-        Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+        Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TFGSELFUPDATE=1",
         UseShellExecute = true
     });
 

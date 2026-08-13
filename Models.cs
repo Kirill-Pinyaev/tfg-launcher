@@ -29,7 +29,7 @@ internal sealed record ServerStatus(
 internal sealed record ReleaseAsset(string Name, long Size, string DownloadUrl, string Sha256);
 internal sealed record LauncherProgress(int Percent, string Message);
 internal sealed record RepairResult(bool Healthy, IReadOnlyList<string> DamagedFiles);
-internal sealed record LauncherUpdate(string Version, string InstallerUrl, long Size, string Sha256, string SignerThumbprint);
+internal sealed record LauncherUpdate(string Version, string InstallerUrl, string SignatureUrl, long Size, string Sha256);
 
 internal sealed class GitHubRelease
 {

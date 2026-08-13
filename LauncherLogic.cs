@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -178,67 +179,21 @@ internal static class SafePath
     }
 }
 
-internal static class Authenticode
+internal static class UpdateSignature
 {
-    private static readonly Guid VerifyAction = new("00AAC56B-CD44-11D0-8CC2-00C04FC295EE");
+    private const string PublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6IaYPxKZYX5scI+vux3iocLQcN+D6oou0V/hMJXdGrvAtlILLZjrwY2xYbanAyO+qIUQRE3cgILfSwrQc3upFA==";
 
-    public static bool IsTrusted(string path)
+    public static bool Verify(string path, byte[] signature)
     {
-        var filePath = Marshal.StringToCoTaskMemUni(path);
-        var fileInfo = new WinTrustFileInfo
-        {
-            Size = (uint)Marshal.SizeOf<WinTrustFileInfo>(),
-            FilePath = filePath
-        };
-        var fileInfoPointer = Marshal.AllocCoTaskMem(Marshal.SizeOf<WinTrustFileInfo>());
-        Marshal.StructureToPtr(fileInfo, fileInfoPointer, false);
         try
         {
-            var data = new WinTrustData
-            {
-                Size = (uint)Marshal.SizeOf<WinTrustData>(),
-                UiChoice = 2,
-                UnionChoice = 1,
-                FileInfo = fileInfoPointer,
-                ProviderFlags = 0x00000020
-            };
-            return WinVerifyTrust(IntPtr.Zero, VerifyAction, ref data) == 0;
+            using var key = ECDsa.Create();
+            key.ImportSubjectPublicKeyInfo(Convert.FromBase64String(PublicKey), out _);
+            using var file = File.OpenRead(path);
+            return key.VerifyData(file, signature, HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence);
         }
-        finally
-        {
-            Marshal.FreeCoTaskMem(fileInfoPointer);
-            Marshal.FreeCoTaskMem(filePath);
-        }
-    }
-
-    [DllImport("wintrust.dll", ExactSpelling = true, PreserveSig = true)]
-    private static extern int WinVerifyTrust(IntPtr window, [MarshalAs(UnmanagedType.LPStruct)] Guid action, ref WinTrustData data);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WinTrustFileInfo
-    {
-        public uint Size;
-        public IntPtr FilePath;
-        public IntPtr File;
-        public IntPtr KnownSubject;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WinTrustData
-    {
-        public uint Size;
-        public IntPtr PolicyCallbackData;
-        public IntPtr SipClientData;
-        public uint UiChoice;
-        public uint RevocationChecks;
-        public uint UnionChoice;
-        public IntPtr FileInfo;
-        public uint StateAction;
-        public IntPtr StateData;
-        public IntPtr UrlReference;
-        public uint ProviderFlags;
-        public uint UiContext;
-        public IntPtr SignatureSettings;
+        catch (CryptographicException) { return false; }
     }
 }
 

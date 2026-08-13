@@ -10,7 +10,7 @@ dotnet publish -c Release -r win-x64
 ```
 
 Готовые файлы: `bin/publish/TFG Launcher.exe` и
-`artifacts/TFG-Launcher-Setup-1.1.0.exe`.
+`artifacts/TFG-Launcher-Setup-1.1.1.exe`.
 
 Лаунчер хранит Java, Minecraft, сборку и настройки в `%LocalAppData%\TFGLauncher`.
 Версия клиента берётся из метки `[TFG:x.y.z]` в MOTD сервера. Устанавливается полный
@@ -22,8 +22,19 @@ Ely.by, HTTPS PNG (Classic/Slim) и сброса. Команду нужно вс
 Публичная запись скина без авторизации намеренно не добавлена.
 
 Обновления launcher объявляются через `/api/v1/launcher`, скачиваются как installer
-из GitHub Releases и принимаются только после проверки SHA-256, действительной
-Authenticode-подписи и закреплённого SHA-256 thumbprint сертификата издателя.
+из GitHub Releases и проверяются по размеру, SHA-256 и собственной ECDSA P-256 подписи.
+Публичный ключ встроен в launcher; закрытый ключ хранится вне репозитория. Windows
+по-прежнему показывает «Неизвестный издатель», так как это не Authenticode.
+
+GitHub Actions автоматически собирает Release при отправке тега `v*`:
+
+```bash
+git tag v1.1.1
+git push origin main v1.1.1
+```
+
+Перед первым релизом добавьте содержимое `update-private.pem` в GitHub Actions secret
+`TFG_UPDATE_SIGNING_KEY`. Release содержит installer, `SHA256SUMS.txt` и detached-файл `.sig`.
 
 Для подключения сначала используется публичный адрес `77.51.139.159`. Если роутер
 не поддерживает NAT loopback, лаунчер автоматически использует локальный адрес

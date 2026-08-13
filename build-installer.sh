@@ -10,4 +10,13 @@ if [[ ! -f "$iscc" ]]; then
   exit 1
 fi
 wine "$iscc" "$(winepath -w "$project_dir/installer/TFGLauncher.iss")"
-sha256sum "$project_dir/artifacts/TFG-Launcher-Setup-1.1.0.exe"
+installer="$project_dir/artifacts/TFG-Launcher-Setup-1.1.1.exe"
+private_key=${TFG_UPDATE_PRIVATE_KEY:-"$HOME/.config/tfg-launcher-signing/update-private.pem"}
+if [[ ! -f "$private_key" ]]; then
+  echo "Закрытый ключ обновлений не найден: $private_key" >&2
+  exit 1
+fi
+openssl dgst -sha256 -sign "$private_key" -out "$installer.sig" "$installer"
+public_key="$(dirname "$private_key")/update-public.pem"
+openssl dgst -sha256 -verify "$public_key" -signature "$installer.sig" "$installer"
+sha256sum "$installer"

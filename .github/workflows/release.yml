@@ -33,7 +33,7 @@ jobs:
         shell: powershell
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\TFGLauncher.iss'
       - name: Sign update
-        shell: powershell
+        shell: pwsh
         env:
           TFG_UPDATE_SIGNING_KEY: ${{ secrets.TFG_UPDATE_SIGNING_KEY }}
         run: |

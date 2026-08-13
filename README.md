@@ -10,7 +10,7 @@ dotnet publish -c Release -r win-x64
 ```
 
 Готовые файлы: `bin/publish/TFG Launcher.exe` и
-`artifacts/TFG-Launcher-Setup-1.1.1.exe`.
+`artifacts/TFG-Launcher-Setup-1.2.0.exe`.
 
 Лаунчер хранит Java, Minecraft, сборку и настройки в `%LocalAppData%\TFGLauncher`.
 Версия клиента берётся из метки `[TFG:x.y.z]` в MOTD сервера. Устанавливается полный
@@ -26,11 +26,16 @@ Ely.by, HTTPS PNG (Classic/Slim) и сброса. Команду нужно вс
 Публичный ключ встроен в launcher; закрытый ключ хранится вне репозитория. Windows
 по-прежнему показывает «Неизвестный издатель», так как это не Authenticode.
 
+Лаунчер умеет входить в серверный аккаунт, хранит только session token в Windows
+Credential Manager и поддерживает обычный выход и отзыв всех сессий. Пароль на диск
+не записывается. Обязательная проверка game ticket самим Minecraft включается вместе
+с клиентским и серверным auth-модами на этапе 12.
+
 GitHub Actions автоматически собирает Release при отправке тега `v*`:
 
 ```bash
-git tag v1.1.1
-git push origin main v1.1.1
+git tag v1.2.0
+git push origin main v1.2.0
 ```
 
 Перед первым релизом добавьте содержимое `update-private.pem` в GitHub Actions secret

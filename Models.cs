@@ -30,6 +30,36 @@ internal sealed record ReleaseAsset(string Name, long Size, string DownloadUrl, 
 internal sealed record LauncherProgress(int Percent, string Message);
 internal sealed record RepairResult(bool Healthy, IReadOnlyList<string> DamagedFiles);
 internal sealed record LauncherUpdate(string Version, string InstallerUrl, string SignatureUrl, long Size, string Sha256);
+internal sealed record AuthSession(string Nickname, IReadOnlyList<string> Roles);
+internal sealed record GameTicket(string Ticket, string Nickname, DateTimeOffset ExpiresAt);
+
+internal sealed class AuthResponse
+{
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = "";
+    [JsonPropertyName("nickname")]
+    public string Nickname { get; set; } = "";
+    [JsonPropertyName("roles")]
+    public List<string> Roles { get; set; } = [];
+}
+
+internal sealed class AccountResponse
+{
+    [JsonPropertyName("nickname")]
+    public string Nickname { get; set; } = "";
+    [JsonPropertyName("roles")]
+    public List<string> Roles { get; set; } = [];
+}
+
+internal sealed class GameTicketResponse
+{
+    [JsonPropertyName("ticket")]
+    public string Ticket { get; set; } = "";
+    [JsonPropertyName("nickname")]
+    public string Nickname { get; set; } = "";
+    [JsonPropertyName("expires_at")]
+    public DateTimeOffset ExpiresAt { get; set; }
+}
 
 internal sealed class GitHubRelease
 {

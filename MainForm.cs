@@ -6,6 +6,10 @@ internal sealed class MainForm : Form
 {
     private readonly LauncherService service = new();
     private readonly TextBox nicknameBox = new();
+    private readonly TextBox passwordBox = new();
+    private readonly Label authLabel = new();
+    private readonly Button authButton = new();
+    private readonly Button revokeButton = new();
     private readonly Label serverLabel = new();
     private readonly Label versionLabel = new();
     private readonly Label statusLabel = new();
@@ -18,12 +22,13 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 30_000 };
     private ServerStatus serverStatus = new(false, 0, 0, null);
     private Process? gameProcess;
+    private AuthSession? authSession;
     private bool updateBlocked;
 
     public MainForm()
     {
         Text = "TFG Launcher";
-        ClientSize = new Size(500, 425);
+        ClientSize = new Size(500, 510);
         MinimumSize = MaximumSize = Size;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -57,9 +62,44 @@ internal sealed class MainForm : Form
         nicknameBox.BorderStyle = BorderStyle.FixedSingle;
         nicknameBox.MaxLength = 16;
 
-        skinButton.SetBounds(35, 214, 135, 34);
-        repairButton.SetBounds(180, 214, 135, 34);
-        diagnosticsButton.SetBounds(325, 214, 140, 34);
+        var passwordLabel = MakeLabel("Пароль", 9F, FontStyle.Regular);
+        passwordLabel.Location = new Point(35, 207);
+        passwordLabel.AutoSize = true;
+        passwordLabel.ForeColor = Color.Silver;
+
+        passwordBox.Location = new Point(35, 229);
+        passwordBox.Size = new Size(430, 30);
+        passwordBox.BackColor = Color.FromArgb(38, 38, 42);
+        passwordBox.ForeColor = Color.White;
+        passwordBox.BorderStyle = BorderStyle.FixedSingle;
+        passwordBox.UseSystemPasswordChar = true;
+        passwordBox.MaxLength = 200;
+
+        authLabel.SetBounds(35, 266, 220, 25);
+        authLabel.ForeColor = Color.Gray;
+        authLabel.Text = "Аккаунт: вход не выполнен";
+        authButton.SetBounds(265, 263, 90, 28);
+        revokeButton.SetBounds(365, 263, 100, 28);
+        foreach (var button in new[] { authButton, revokeButton })
+        {
+            button.FlatStyle = FlatStyle.Flat;
+            button.BackColor = Color.FromArgb(38, 38, 42);
+            button.ForeColor = Color.WhiteSmoke;
+            button.Font = new Font("Segoe UI", 8F);
+        }
+        authButton.Text = "ВОЙТИ";
+        authButton.Click += async (_, _) =>
+        {
+            if (authSession is null) await AuthenticateAsync();
+            else await LogoutAsync(false);
+        };
+        revokeButton.Text = "ВЫЙТИ ВЕЗДЕ";
+        revokeButton.Visible = false;
+        revokeButton.Click += async (_, _) => await LogoutAsync(true);
+
+        skinButton.SetBounds(35, 302, 135, 34);
+        repairButton.SetBounds(180, 302, 135, 34);
+        diagnosticsButton.SetBounds(325, 302, 140, 34);
         foreach (var button in new[] { skinButton, repairButton, diagnosticsButton })
         {
             button.FlatStyle = FlatStyle.Flat;
@@ -73,7 +113,7 @@ internal sealed class MainForm : Form
         diagnosticsButton.Text = "ДИАГНОСТИКА";
         diagnosticsButton.Click += (_, _) => ShowDiagnostics();
 
-        playButton.Location = new Point(35, 262);
+        playButton.Location = new Point(35, 350);
         playButton.Size = new Size(430, 52);
         playButton.FlatStyle = FlatStyle.Flat;
         playButton.FlatAppearance.BorderSize = 0;
@@ -84,23 +124,24 @@ internal sealed class MainForm : Form
         playButton.Cursor = Cursors.Hand;
         playButton.Click += async (_, _) => await PlayAsync();
 
-        progressBar.Location = new Point(35, 328);
+        progressBar.Location = new Point(35, 416);
         progressBar.Size = new Size(430, 8);
         progressBar.Style = ProgressBarStyle.Continuous;
         progressBar.Visible = false;
 
-        statusLabel.Location = new Point(35, 344);
+        statusLabel.Location = new Point(35, 432);
         statusLabel.Size = new Size(430, 24);
         statusLabel.ForeColor = Color.Gray;
         statusLabel.TextAlign = ContentAlignment.MiddleCenter;
 
-        footerLabel.Location = new Point(35, 390);
+        footerLabel.Location = new Point(35, 475);
         footerLabel.Size = new Size(430, 20);
         footerLabel.ForeColor = Color.DimGray;
         footerLabel.Font = new Font("Segoe UI", 8F);
         footerLabel.TextAlign = ContentAlignment.MiddleCenter;
 
-        Controls.AddRange([title, serverLabel, versionLabel, nicknameLabel, nicknameBox,
+        Controls.AddRange([title, serverLabel, versionLabel, nicknameLabel, nicknameBox, passwordLabel, passwordBox,
+            authLabel, authButton, revokeButton,
             skinButton, repairButton, diagnosticsButton, playButton, progressBar, statusLabel, footerLabel]);
         var settings = service.LoadSettings();
         nicknameBox.Text = settings.Nickname;
@@ -109,7 +150,11 @@ internal sealed class MainForm : Form
         Shown += async (_, _) =>
         {
             await CheckSelfUpdateAsync();
-            if (!updateBlocked) await RefreshServerAsync();
+            if (!updateBlocked)
+            {
+                await RefreshServerAsync();
+                await RestoreAuthAsync();
+            }
         };
         refreshTimer.Tick += async (_, _) => await RefreshServerAsync();
         refreshTimer.Start();
@@ -177,9 +222,72 @@ internal sealed class MainForm : Form
         footerLabel.Text = $"Лаунчер {Application.ProductVersion}  •  Сборка {(string.IsNullOrEmpty(installed) ? "—" : installed)}";
     }
 
+    private async Task RestoreAuthAsync()
+    {
+        try
+        {
+            authSession = await service.RestoreSessionAsync();
+            if (authSession is not null) nicknameBox.Text = authSession.Nickname;
+            UpdateAuthUi();
+        }
+        catch (Exception ex)
+        {
+            service.Log(ex);
+            authLabel.Text = "Аккаунт: сервер авторизации недоступен";
+        }
+    }
+
+    private async Task<bool> AuthenticateAsync()
+    {
+        var nickname = nicknameBox.Text.Trim();
+        if (!InputRules.IsValidNickname(nickname) || string.IsNullOrEmpty(passwordBox.Text))
+        {
+            MessageBox.Show("Введите корректный ник и пароль.", "TFG Launcher",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        SetBusy(true, "Вход в аккаунт...");
+        try
+        {
+            authSession = await service.LoginAsync(nickname, passwordBox.Text);
+            passwordBox.Clear();
+            nicknameBox.Text = authSession.Nickname;
+            service.SaveSettings(new LauncherSettings { Nickname = authSession.Nickname });
+            UpdateAuthUi();
+            return true;
+        }
+        catch (Exception ex) { service.Log(ex); ShowError(ex); return false; }
+        finally { SetBusy(false, ""); }
+    }
+
+    private async Task LogoutAsync(bool allSessions)
+    {
+        SetBusy(true, allSessions ? "Отзыв всех сессий..." : "Выход...");
+        try
+        {
+            await service.LogoutAsync(allSessions);
+            authSession = null;
+            UpdateAuthUi();
+        }
+        catch (Exception ex) { service.Log(ex); ShowError(ex); }
+        finally { SetBusy(false, ""); }
+    }
+
+    private void UpdateAuthUi()
+    {
+        var loggedIn = authSession is not null;
+        authLabel.Text = loggedIn ? $"Аккаунт: {authSession!.Nickname}" : "Аккаунт: вход не выполнен";
+        authLabel.ForeColor = loggedIn ? Color.FromArgb(111, 207, 151) : Color.Gray;
+        authButton.Text = loggedIn ? "ВЫЙТИ" : "ВОЙТИ";
+        revokeButton.Visible = loggedIn;
+        nicknameBox.ReadOnly = loggedIn;
+        passwordBox.Enabled = !loggedIn;
+    }
+
     private async Task PlayAsync()
     {
         if (gameProcess is { HasExited: false }) return;
+        if (authSession is null && passwordBox.TextLength > 0 && !await AuthenticateAsync()) return;
         var nickname = nicknameBox.Text.Trim();
         if (!InputRules.IsValidNickname(nickname))
         {
@@ -249,6 +357,9 @@ internal sealed class MainForm : Form
     {
         playButton.Enabled = !busy;
         nicknameBox.Enabled = !busy;
+        passwordBox.Enabled = !busy && authSession is null;
+        authButton.Enabled = !busy;
+        revokeButton.Enabled = !busy;
         skinButton.Enabled = !busy;
         repairButton.Enabled = !busy;
         diagnosticsButton.Enabled = !busy;

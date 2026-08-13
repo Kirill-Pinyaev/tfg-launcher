@@ -8,6 +8,8 @@ using CmlLib.Core.VersionLoader;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Json;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -50,6 +52,76 @@ internal sealed class LauncherService
     public LauncherSettings LoadSettings() => LoadJson(SettingsPath, new LauncherSettings());
     public InstallationState LoadState() => LoadJson(StatePath, new InstallationState());
     public void SaveSettings(LauncherSettings settings) => SaveJsonAtomic(SettingsPath, settings);
+
+    public async Task<AuthSession?> RestoreSessionAsync(CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load();
+        if (credential is null) return null;
+        using var request = AuthRequest(HttpMethod.Get, "/api/v1/auth/me", credential.Value.Token);
+        using var response = await http.SendAsync(request, token);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            CredentialStore.Delete();
+            return null;
+        }
+        response.EnsureSuccessStatusCode();
+        var account = await response.Content.ReadFromJsonAsync<AccountResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Сервер авторизации вернул пустой ответ.");
+        return new AuthSession(account.Nickname, account.Roles);
+    }
+
+    public async Task<AuthSession> LoginAsync(string nickname, string password, CancellationToken token = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiBaseUrl}/api/v1/auth/login")
+        {
+            Content = JsonContent.Create(new
+            {
+                nickname,
+                password,
+                device_name = Environment.MachineName
+            })
+        };
+        using var response = await http.SendAsync(request, token);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.TooManyRequests)
+            throw new InvalidOperationException(response.StatusCode == HttpStatusCode.TooManyRequests
+                ? "Слишком много попыток входа. Повторите через 15 минут."
+                : "Неверный ник или пароль.");
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<AuthResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Сервер авторизации вернул пустой ответ.");
+        CredentialStore.Save(result.Nickname, result.Token);
+        return new AuthSession(result.Nickname, result.Roles);
+    }
+
+    public async Task LogoutAsync(bool allSessions, CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load();
+        if (credential is null) return;
+        using var request = AuthRequest(HttpMethod.Post,
+            allSessions ? "/api/v1/auth/logout-all" : "/api/v1/auth/logout", credential.Value.Token);
+        using var response = await http.SendAsync(request, token);
+        if (response.StatusCode != HttpStatusCode.Unauthorized) response.EnsureSuccessStatusCode();
+        CredentialStore.Delete();
+    }
+
+    public async Task<GameTicket> CreateGameTicketAsync(CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load() ?? throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        using var request = AuthRequest(HttpMethod.Post, "/api/v1/auth/game-ticket", credential.Token);
+        using var response = await http.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<GameTicketResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Сервер авторизации вернул пустой ответ.");
+        return new GameTicket(result.Ticket, result.Nickname, result.ExpiresAt);
+    }
+
+    private static HttpRequestMessage AuthRequest(HttpMethod method, string path, string token)
+    {
+        var request = new HttpRequestMessage(method, $"{ApiBaseUrl}{path}");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        if (method == HttpMethod.Post) request.Content = JsonContent.Create(new { });
+        return request;
+    }
 
     public async Task<ServerStatus> GetServerStatusAsync(CancellationToken token = default)
     {

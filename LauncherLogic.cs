@@ -225,6 +225,10 @@ internal static class SelfTest
         try { _ = MemoryPolicy.MaximumRamMb(7 * gib); throw new Exception("Low memory rule failed"); }
         catch (InvalidOperationException) { }
         if (ServerPing.ExtractPackVersion("Modern [TFG:0.13.7]") != "0.13.7") throw new Exception("MOTD parser failed");
+        if (!LauncherService.TryParseReleaseVersion("1.5.1+9f9175d5f99a6937632ca4f828e3eab4ae581a5d", out var sdkStamped) ||
+            sdkStamped != new Version(1, 5, 1)) throw new Exception("SDK-stamped version parsing failed");
+        if (!LauncherService.TryParseReleaseVersion("1.5.2", out var plain) || plain != new Version(1, 5, 2))
+            throw new Exception("Plain version parsing failed");
         if (!InputRules.IsValidNickname("katushka-s-tokom")) throw new Exception("Nickname rule failed");
         if (!InputRules.TryParseServer("192.168.1.78:25570", out var endpoint) ||
             endpoint.Host != "192.168.1.78" || endpoint.Port != 25570) throw new Exception("Server address rule failed");

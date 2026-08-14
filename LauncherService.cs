@@ -267,7 +267,8 @@ internal sealed class LauncherService
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
         var launcher = document.RootElement.GetProperty("launcher");
         var version = launcher.GetProperty("version").GetString() ?? "";
-        if (!Version.TryParse(version, out var available) || !Version.TryParse(currentVersion, out var current) || available <= current)
+        if (!TryParseReleaseVersion(version, out var available) ||
+            !TryParseReleaseVersion(currentVersion, out var current) || available <= current)
             return null;
         var update = new LauncherUpdate(
             version,
@@ -415,6 +416,12 @@ internal sealed class LauncherService
 
     private static bool IsHttps(string value) => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme == Uri.UriSchemeHttps;
+
+    // The SDK embeds ProductVersion as "1.5.1+<git-sha>" (SourceRevisionId), which
+    // System.Version.TryParse rejects outright, silently breaking every update comparison.
+    // Only the numeric major.minor[.build[.revision]] part in front of '+' or '-' is meaningful here.
+    internal static bool TryParseReleaseVersion(string raw, out Version version) =>
+        Version.TryParse(raw.Split('+', '-')[0], out version!);
 
     public static void StartInstaller(string path) => Process.Start(new ProcessStartInfo
     {

@@ -29,6 +29,10 @@ internal sealed class LauncherService
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly string[] ProtectedFiles = ["options.txt", "servers.dat"];
     private static readonly string[] ProtectedDirectories = ["saves/"];
+    // Mods legitimately rewrite their own config on first run (detected settings, computed
+    // defaults, caches). These directories are still installed/replaced normally, but are not
+    // hash-verified, so normal gameplay never gets misreported as a "damaged" installation.
+    private static readonly string[] RuntimeMutableDirectories = ["config/", "logs/", "crash-reports/"];
     private readonly HttpClient http;
 
     public string RootDirectory { get; }
@@ -511,6 +515,7 @@ internal sealed class LauncherService
             token.ThrowIfCancellationRequested();
             var path = SafePath.Resolve(GameDirectory, relative);
             if (!File.Exists(path)) { damaged.Add(relative); continue; }
+            if (IsRuntimeMutable(relative)) continue;
             await using var file = File.OpenRead(path);
             var actual = Convert.ToHexString(await SHA256.HashDataAsync(file, token));
             if (!state.ManagedHashes.TryGetValue(relative, out var expected) ||
@@ -905,6 +910,12 @@ internal sealed class LauncherService
         var normalized = relativePath.Replace('\\', '/');
         return ProtectedFiles.Contains(normalized, StringComparer.OrdinalIgnoreCase) ||
             ProtectedDirectories.Any(x => normalized.StartsWith(x, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsRuntimeMutable(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        return RuntimeMutableDirectories.Any(x => normalized.StartsWith(x, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string ComputeSha256(string path)

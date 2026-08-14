@@ -1,0 +1,55 @@
+name: External server security audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/external-audit.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: 77.51.139.159
+      STATUS_URL: https://tfg.kirillkatya.crazedns.ru
+    steps:
+      - name: Install scanner
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nmap
+      - name: Scan common TCP ports
+        run: nmap -Pn -sT --top-ports 1000 --reason --open "$TARGET" -oN external-tcp.txt
+      - name: Verify intended Minecraft exposure
+        run: |
+          nmap -Pn -sT -p25565 --reason "$TARGET" -oN minecraft-tcp.txt
+          grep -Eq '^25565/tcp[[:space:]]+open' minecraft-tcp.txt
+          sudo nmap -Pn -sU -p24454 --reason "$TARGET" -oN voice-udp.txt
+      - name: Verify private services are closed
+        run: |
+          nmap -Pn -sT -p5433,8080,8084,8090,8091,25575 --reason "$TARGET" -oN private-ports.txt
+          if grep -Eq '^(5433|8080|8084|8090|8091|25575)/tcp[[:space:]]+open' private-ports.txt; then
+            echo 'A private administration port is publicly reachable' >&2
+            exit 1
+          fi
+      - name: Check HTTPS and auth CORS
+        run: |
+          curl -fsS -D status-headers.txt -o status.json "$STATUS_URL/api/v1/status"
+          curl -sS -D auth-headers.txt -o auth-options.json -X OPTIONS "$STATUS_URL/api/v1/auth/login"
+          grep -q 'HTTP/.* 200' status-headers.txt
+          grep -q 'HTTP/.* 403' auth-headers.txt
+          ! grep -qi '^Access-Control-Allow-Origin:' auth-headers.txt
+          openssl s_client -connect tfg.kirillkatya.crazedns.ru:443 -servername tfg.kirillkatya.crazedns.ru </dev/null > tls.txt 2>&1
+          grep -q 'Verify return code: 0 (ok)' tls.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: external-security-audit
+          path: |
+            external-tcp.txt
+            minecraft-tcp.txt
+            voice-udp.txt
+            private-ports.txt
+            status-headers.txt
+            auth-headers.txt
+            tls.txt

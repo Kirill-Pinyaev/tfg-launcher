@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -252,6 +253,9 @@ internal static class SelfTest
             service.EnsureDefaultServer();
             if (File.ReadAllBytes(Path.Combine(service.GameDirectory, "servers.dat")).Length != serverLength)
                 throw new Exception("Duplicate server failed");
+            service.EnsureAuthMod();
+            using var authMod = ZipFile.OpenRead(Path.Combine(service.GameDirectory, "mods", "tfgauth-1.0.0.jar"));
+            if (authMod.GetEntry("META-INF/mods.toml") is null) throw new Exception("Embedded auth mod failed");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
         Console.WriteLine("Self-test passed.");

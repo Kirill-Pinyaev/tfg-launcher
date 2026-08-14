@@ -38,6 +38,7 @@ internal sealed class LauncherService
     private string SettingsPath => Path.Combine(RootDirectory, "settings.json");
     private string StatePath => Path.Combine(RootDirectory, "installation.json");
     private string LogPath => Path.Combine(RootDirectory, "launcher.log");
+    private string AuthTicketPath => Path.Combine(GameDirectory, ".tfg-auth-ticket");
 
     public LauncherService(string? rootDirectory = null)
     {
@@ -372,6 +373,7 @@ internal sealed class LauncherService
 
     public async Task<RepairResult> VerifyInstallationAsync(CancellationToken token = default)
     {
+        EnsureAuthMod();
         var state = LoadState();
         if (state.ManagedFiles.Count == 0 || state.ManagedHashes.Count == 0)
             return new RepairResult(false, ["Манифест установленной сборки отсутствует"]);
@@ -428,12 +430,39 @@ internal sealed class LauncherService
         if (File.Exists(source)) archive.CreateEntryFromFile(source, name, CompressionLevel.Optimal);
     }
 
-    public async Task<Process> LaunchAsync(string nickname, int maximumRamMb, CancellationToken token = default)
+    public async Task<Process> LaunchAsync(GameTicket ticket, int maximumRamMb, CancellationToken token = default)
     {
-        var process = await BuildProcessAsync(nickname, maximumRamMb, token);
+        if (!InputRules.IsValidNickname(ticket.Nickname) || string.IsNullOrWhiteSpace(ticket.Ticket))
+            throw new InvalidDataException("Сервер авторизации вернул некорректный билет входа.");
+        EnsureAuthMod();
+        var process = await BuildProcessAsync(ticket.Nickname, maximumRamMb, token);
+        SaveBytesAtomic(AuthTicketPath, Encoding.UTF8.GetBytes(ticket.Ticket));
         process.EnableRaisingEvents = true;
-        process.Start();
-        return process;
+        try
+        {
+            process.Start();
+            return process;
+        }
+        catch
+        {
+            try { File.Delete(AuthTicketPath); } catch { }
+            throw;
+        }
+    }
+
+    internal void EnsureAuthMod()
+    {
+        var destination = Path.Combine(GameDirectory, "mods", "tfgauth-1.0.0.jar");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        using var source = typeof(LauncherService).Assembly.GetManifestResourceStream("TFGLauncher.tfgauth.jar")
+            ?? throw new InvalidOperationException("В лаунчере отсутствует обязательный мод авторизации.");
+        var temporary = destination + ".tmp";
+        try
+        {
+            using (var output = File.Create(temporary)) source.CopyTo(output);
+            File.Move(temporary, destination, true);
+        }
+        finally { try { File.Delete(temporary); } catch { } }
     }
 
     internal async Task<Process> BuildProcessAsync(

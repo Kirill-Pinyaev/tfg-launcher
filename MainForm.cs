@@ -287,8 +287,8 @@ internal sealed class MainForm : Form
     private async Task PlayAsync()
     {
         if (gameProcess is { HasExited: false }) return;
-        if (authSession is null && passwordBox.TextLength > 0 && !await AuthenticateAsync()) return;
-        var nickname = nicknameBox.Text.Trim();
+        if (authSession is null && !await AuthenticateAsync()) return;
+        var nickname = authSession!.Nickname;
         if (!InputRules.IsValidNickname(nickname))
         {
             MessageBox.Show("Ник должен содержать 3–16 латинских букв, цифр, '_' или '-'.",
@@ -332,8 +332,12 @@ internal sealed class MainForm : Form
             }
             else if (!await RepairAsync(false)) return;
 
+            statusLabel.Text = "Получение одноразового билета входа...";
+            var ticket = await service.CreateGameTicketAsync();
+            if (!string.Equals(ticket.Nickname, nickname, StringComparison.Ordinal))
+                throw new InvalidDataException("Ник билета не совпадает с аккаунтом лаунчера.");
             statusLabel.Text = $"Запуск с {memory / 1024} ГБ памяти...";
-            gameProcess = await service.LaunchAsync(nickname, memory);
+            gameProcess = await service.LaunchAsync(ticket, memory);
             playButton.Text = "ИГРА ЗАПУЩЕНА";
             WindowState = FormWindowState.Minimized;
             await gameProcess.WaitForExitAsync();

@@ -10,7 +10,6 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -21,7 +20,6 @@ namespace TFGLauncher;
 internal sealed class LauncherService
 {
     public const string ServerHost = "77.51.139.159";
-    public const string LanServerHost = "192.168.1.78";
     public const ushort ServerPort = 25565;
     public const string InitialPackVersion = "0.13.7";
     public const int CurrentPackageRevision = 3;
@@ -34,7 +32,6 @@ internal sealed class LauncherService
 
     public string RootDirectory { get; }
     public string GameDirectory => Path.Combine(RootDirectory, "game");
-    public string ConnectionHost { get; private set; } = ServerHost;
     private string SettingsPath => Path.Combine(RootDirectory, "settings.json");
     private string StatePath => Path.Combine(RootDirectory, "installation.json");
     private string LogPath => Path.Combine(RootDirectory, "launcher.log");
@@ -53,6 +50,27 @@ internal sealed class LauncherService
     public LauncherSettings LoadSettings() => LoadJson(SettingsPath, new LauncherSettings());
     public InstallationState LoadState() => LoadJson(StatePath, new InstallationState());
     public void SaveSettings(LauncherSettings settings) => SaveJsonAtomic(SettingsPath, settings);
+
+    public ServerEndpoint GetServerEndpoint() =>
+        InputRules.TryParseServer(LoadSettings().ServerAddress, out var endpoint)
+            ? endpoint
+            : new ServerEndpoint(ServerHost, ServerPort);
+
+    public void SaveNickname(string nickname)
+    {
+        var settings = LoadSettings();
+        settings.Nickname = nickname;
+        SaveSettings(settings);
+    }
+
+    public void SaveServerAddress(string address)
+    {
+        if (!InputRules.TryParseServer(address, out var endpoint))
+            throw new ArgumentException("Укажите корректный IPv4-адрес или домен и порт, например 77.51.139.159:25565.");
+        var settings = LoadSettings();
+        settings.ServerAddress = endpoint.Address;
+        SaveSettings(settings);
+    }
 
     public async Task<AuthSession?> RestoreSessionAsync(CancellationToken token = default)
     {
@@ -128,35 +146,11 @@ internal sealed class LauncherService
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        var apiStatus = await CheckStatusApiAsync(timeout.Token);
-        if (apiStatus.Online)
-        {
-            ConnectionHost = IsOnServerLan() ? LanServerHost : ServerHost;
-            return apiStatus;
-        }
-        var checks = new List<Task<(ServerStatus Status, string Host)>>
-        {
-            CheckDirectAsync(ServerHost, timeout.Token),
-            CheckApiAsync($"https://api.mcsrvstat.us/3/{ServerHost}:{ServerPort}", timeout.Token),
-            CheckApiAsync($"https://api.mcstatus.io/v2/status/java/{ServerHost}:{ServerPort}", timeout.Token)
-        };
-        if (IsOnServerLan()) checks.Add(CheckDirectAsync(LanServerHost, timeout.Token));
-
-        while (checks.Count > 0)
-        {
-            var completed = await Task.WhenAny(checks);
-            checks.Remove(completed);
-            var result = await completed;
-            if (result.Status.Online)
-            {
-                ConnectionHost = result.Host;
-                timeout.Cancel();
-                return result.Status;
-            }
-        }
-        token.ThrowIfCancellationRequested();
-        ConnectionHost = ServerHost;
-        return apiStatus;
+        var endpoint = GetServerEndpoint();
+        if (endpoint.Host == ServerHost && endpoint.Port == ServerPort)
+            return await CheckStatusApiAsync(timeout.Token);
+        try { return await ServerPing.QueryAsync(endpoint.Host, endpoint.Port, timeout.Token); }
+        catch { return new ServerStatus(false, 0, 0, null); }
     }
 
     private async Task<ServerStatus> CheckStatusApiAsync(CancellationToken token)
@@ -253,42 +247,6 @@ internal sealed class LauncherService
         Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TFGSELFUPDATE=1",
         UseShellExecute = true
     });
-
-    private static async Task<(ServerStatus Status, string Host)> CheckDirectAsync(
-        string host, CancellationToken token)
-    {
-        try { return (await ServerPing.QueryAsync(host, ServerPort, token), host); }
-        catch { return (new ServerStatus(false, 0, 0, null), host); }
-    }
-
-    private async Task<(ServerStatus Status, string Host)> CheckApiAsync(string url, CancellationToken token)
-    {
-        try
-        {
-            using var response = await http.GetAsync(url, token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(token);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
-            var root = document.RootElement;
-            if (!root.GetProperty("online").GetBoolean())
-                return (new ServerStatus(false, 0, 0, null), ServerHost);
-            var players = root.GetProperty("players");
-            var clean = root.GetProperty("motd").GetProperty("clean");
-            var motd = clean.ValueKind == JsonValueKind.Array
-                ? string.Join(" ", clean.EnumerateArray().Select(x => x.GetString()))
-                : clean.GetString() ?? "";
-            return (new ServerStatus(true,
-                players.GetProperty("online").GetInt32(),
-                players.GetProperty("max").GetInt32(),
-                ServerPing.ExtractPackVersion(motd)), ServerHost);
-        }
-        catch { return (new ServerStatus(false, 0, 0, null), ServerHost); }
-    }
-
-    private static bool IsOnServerLan() => NetworkInterface.GetAllNetworkInterfaces()
-        .SelectMany(x => x.GetIPProperties().UnicastAddresses)
-        .Any(x => x.Address.AddressFamily == AddressFamily.InterNetwork &&
-            x.Address.GetAddressBytes() is [192, 168, 1, _]);
 
     public async Task<ReleaseAsset> GetReleaseAssetAsync(string version, CancellationToken token = default)
     {
@@ -474,6 +432,7 @@ internal sealed class LauncherService
 
         EnsureDefaultLanguage();
         EnsureDefaultServer();
+        var endpoint = GetServerEndpoint();
         var path = new MinecraftPath(GameDirectory);
         var parameters = MinecraftLauncherParameters.CreateDefault(path);
         parameters.VersionLoader = new LocalJsonVersionLoader(path);
@@ -483,8 +442,8 @@ internal sealed class LauncherService
             Session = MSession.CreateOfflineSession(nickname),
             MinimumRamMb = 2048,
             MaximumRamMb = maximumRamMb,
-            ServerIp = ConnectionHost,
-            ServerPort = ServerPort,
+            ServerIp = endpoint.Host,
+            ServerPort = endpoint.Port,
             GameLauncherName = "TFG Launcher",
             GameLauncherVersion = Application.ProductVersion
         }, token);
@@ -502,6 +461,7 @@ internal sealed class LauncherService
 
     internal void EnsureDefaultServer()
     {
+        var endpoint = GetServerEndpoint();
         var path = Path.Combine(GameDirectory, "servers.dat");
         if (!File.Exists(path))
         {
@@ -510,14 +470,14 @@ internal sealed class LauncherService
             WriteNbtString(output, "servers");
             output.WriteByte(10);
             WriteBigEndianInt(output, 1);
-            WriteServerEntry(output);
+            WriteServerEntry(output, endpoint);
             output.WriteByte(0);
             SaveBytesAtomic(path, output.ToArray());
             return;
         }
 
         var data = File.ReadAllBytes(path);
-        var address = Encoding.UTF8.GetBytes(ServerHost);
+        var address = Encoding.UTF8.GetBytes(endpoint.Address);
         var addressIndex = data.AsSpan().IndexOf(address);
         if (addressIndex >= 0)
         {
@@ -538,21 +498,21 @@ internal sealed class LauncherService
         var count = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(header.Length, 4));
         using var updated = new MemoryStream();
         updated.Write(data, 0, data.Length - 1);
-        WriteServerEntry(updated);
+        WriteServerEntry(updated, endpoint);
         updated.WriteByte(0);
         var result = updated.ToArray();
         BinaryPrimitives.WriteInt32BigEndian(result.AsSpan(header.Length, 4), count + 1);
         SaveBytesAtomic(path, result);
     }
 
-    private static void WriteServerEntry(Stream output)
+    private static void WriteServerEntry(Stream output, ServerEndpoint endpoint)
     {
         output.WriteByte(8);
         WriteNbtString(output, "name");
         WriteNbtString(output, "TerraFirmaGreg");
         output.WriteByte(8);
         WriteNbtString(output, "ip");
-        WriteNbtString(output, $"{ServerHost}:{ServerPort}");
+        WriteNbtString(output, endpoint.Address);
         output.WriteByte(1);
         WriteNbtString(output, "hidden");
         output.WriteByte(0);

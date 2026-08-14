@@ -10,9 +10,11 @@ dotnet publish -c Release -r win-x64
 ```
 
 Готовые файлы: `bin/publish/TFG Launcher.exe` и
-`artifacts/TFG-Launcher-Setup-1.3.0.exe`.
+`artifacts/TFG-Launcher-Setup-1.4.0.exe`.
 
 Лаунчер хранит Java, Minecraft, сборку и настройки в `%LocalAppData%\TFGLauncher`.
+В окне «Настройки» можно изменить адрес Minecraft-сервера; по умолчанию используется
+`77.51.139.159:25565`, а launcher подключается ровно к сохранённому адресу.
 Версия клиента берётся из метки `[TFG:x.y.z]` в MOTD сервера. Устанавливается полный
 официальный `multimc.zip`: официальный `.mrpack` 0.13.7 не содержит обязательный мод
 DeaFission. Архив проверяется по SHA-256 из GitHub Releases. Для самопроверки:
@@ -34,8 +36,8 @@ Credential Manager и поддерживает обычный выход и от
 GitHub Actions автоматически собирает Release при отправке тега `v*`:
 
 ```bash
-git tag v1.3.0
-git push origin main v1.3.0
+git tag v1.4.0
+git push origin main v1.4.0
 ```
 
 Перед первым релизом добавьте содержимое `update-private.pem` в GitHub Actions secret

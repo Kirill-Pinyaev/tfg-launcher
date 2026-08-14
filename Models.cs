@@ -5,6 +5,12 @@ namespace TFGLauncher;
 internal sealed class LauncherSettings
 {
     public string Nickname { get; set; } = "";
+    public string ServerAddress { get; set; } = "77.51.139.159:25565";
+}
+
+internal sealed record ServerEndpoint(string Host, ushort Port)
+{
+    public string Address => $"{Host}:{Port}";
 }
 
 internal sealed class InstallationState

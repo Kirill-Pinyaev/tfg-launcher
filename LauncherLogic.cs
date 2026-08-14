@@ -55,6 +55,19 @@ internal static partial class InputRules
     private static partial Regex NicknameRegex();
 
     public static bool IsValidNickname(string value) => NicknameRegex().IsMatch(value);
+
+    public static bool TryParseServer(string? value, out ServerEndpoint endpoint)
+    {
+        endpoint = new ServerEndpoint(LauncherService.ServerHost, LauncherService.ServerPort);
+        var parts = (value ?? "").Trim().Split(':');
+        if (parts.Length is < 1 or > 2 || string.IsNullOrWhiteSpace(parts[0])) return false;
+        var host = parts[0].Trim();
+        if (!IPAddress.TryParse(host, out _) && Uri.CheckHostName(host) == UriHostNameType.Unknown) return false;
+        ushort port = LauncherService.ServerPort;
+        if (parts.Length == 2 && (!ushort.TryParse(parts[1], out port) || port == 0)) return false;
+        endpoint = new ServerEndpoint(host, port);
+        return true;
+    }
 }
 
 internal static partial class SkinCommands
@@ -209,6 +222,9 @@ internal static class SelfTest
         catch (InvalidOperationException) { }
         if (ServerPing.ExtractPackVersion("Modern [TFG:0.13.7]") != "0.13.7") throw new Exception("MOTD parser failed");
         if (!InputRules.IsValidNickname("katushka-s-tokom")) throw new Exception("Nickname rule failed");
+        if (!InputRules.TryParseServer("192.168.1.78:25570", out var endpoint) ||
+            endpoint.Host != "192.168.1.78" || endpoint.Port != 25570) throw new Exception("Server address rule failed");
+        if (InputRules.TryParseServer("bad host:99999", out _)) throw new Exception("Invalid server address rule failed");
         if (SkinCommands.Build("Mojang", "Notch", false) != "/skin set mojang Notch") throw new Exception("Skin command failed");
         if (SkinCommands.Build("URL", "https://example.org/skin.png", true) != "/skin set web slim \"https://example.org/skin.png\"")
             throw new Exception("Web skin command failed");
@@ -253,6 +269,10 @@ internal static class SelfTest
             service.EnsureDefaultServer();
             if (File.ReadAllBytes(Path.Combine(service.GameDirectory, "servers.dat")).Length != serverLength)
                 throw new Exception("Duplicate server failed");
+            service.SaveServerAddress("192.168.1.78:25570");
+            service.EnsureDefaultServer();
+            if (!Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(service.GameDirectory, "servers.dat")))
+                    .Contains("192.168.1.78:25570")) throw new Exception("Configured server failed");
             service.EnsureAuthMod();
             using var authMod = ZipFile.OpenRead(Path.Combine(service.GameDirectory, "mods", "tfgauth-1.0.0.jar"));
             if (authMod.GetEntry("META-INF/mods.toml") is null) throw new Exception("Embedded auth mod failed");

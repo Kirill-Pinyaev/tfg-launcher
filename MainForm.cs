@@ -19,6 +19,7 @@ internal sealed class MainForm : Form
     private readonly Button skinButton = new();
     private readonly Button repairButton = new();
     private readonly Button diagnosticsButton = new();
+    private readonly Button settingsButton = new();
     private readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 30_000 };
     private ServerStatus serverStatus = new(false, 0, 0, null);
     private Process? gameProcess;
@@ -40,6 +41,21 @@ internal sealed class MainForm : Form
         var title = MakeLabel("TerraFirmaGreg", 26F, FontStyle.Bold);
         title.Location = new Point(32, 26);
         title.AutoSize = true;
+
+        settingsButton.SetBounds(370, 29, 95, 31);
+        settingsButton.Text = "НАСТРОЙКИ";
+        settingsButton.FlatStyle = FlatStyle.Flat;
+        settingsButton.BackColor = Color.FromArgb(38, 38, 42);
+        settingsButton.ForeColor = Color.WhiteSmoke;
+        settingsButton.Font = new Font("Segoe UI", 8F);
+        settingsButton.Click += async (_, _) =>
+        {
+            using var dialog = new SettingsForm(service.GetServerEndpoint().Address);
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            service.SaveServerAddress(dialog.ServerAddress);
+            service.EnsureDefaultServer();
+            await RefreshServerAsync();
+        };
 
         serverLabel.Location = new Point(35, 82);
         serverLabel.Size = new Size(430, 24);
@@ -140,7 +156,7 @@ internal sealed class MainForm : Form
         footerLabel.Font = new Font("Segoe UI", 8F);
         footerLabel.TextAlign = ContentAlignment.MiddleCenter;
 
-        Controls.AddRange([title, serverLabel, versionLabel, nicknameLabel, nicknameBox, passwordLabel, passwordBox,
+        Controls.AddRange([title, settingsButton, serverLabel, versionLabel, nicknameLabel, nicknameBox, passwordLabel, passwordBox,
             authLabel, authButton, revokeButton,
             skinButton, repairButton, diagnosticsButton, playButton, progressBar, statusLabel, footerLabel]);
         var settings = service.LoadSettings();
@@ -158,7 +174,7 @@ internal sealed class MainForm : Form
         };
         refreshTimer.Tick += async (_, _) => await RefreshServerAsync();
         refreshTimer.Start();
-        FormClosing += (_, _) => service.SaveSettings(new LauncherSettings { Nickname = nicknameBox.Text.Trim() });
+        FormClosing += (_, _) => service.SaveNickname(nicknameBox.Text.Trim());
     }
 
     private static Label MakeLabel(string text, float size, FontStyle style) => new()
@@ -252,7 +268,7 @@ internal sealed class MainForm : Form
             authSession = await service.LoginAsync(nickname, passwordBox.Text);
             passwordBox.Clear();
             nicknameBox.Text = authSession.Nickname;
-            service.SaveSettings(new LauncherSettings { Nickname = authSession.Nickname });
+            service.SaveNickname(authSession.Nickname);
             UpdateAuthUi();
             return true;
         }
@@ -300,7 +316,7 @@ internal sealed class MainForm : Form
         try { memory = MemoryPolicy.DetectMaximumRamMb(); }
         catch (Exception ex) { ShowError(ex); return; }
 
-        service.SaveSettings(new LauncherSettings { Nickname = nickname });
+        service.SaveNickname(nickname);
         SetBusy(true, "Проверка версии...");
         try
         {
@@ -367,6 +383,7 @@ internal sealed class MainForm : Form
         skinButton.Enabled = !busy;
         repairButton.Enabled = !busy;
         diagnosticsButton.Enabled = !busy;
+        settingsButton.Enabled = !busy;
         progressBar.Visible = busy;
         if (busy && progressBar.Value == 0) progressBar.Value = 1;
         if (!busy) progressBar.Value = 0;

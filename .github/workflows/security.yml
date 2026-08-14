@@ -36,6 +36,16 @@ jobs:
           $report = dotnet list TFGLauncher.csproj package --vulnerable --include-transitive
           $report
           if ($report -match 'has the following vulnerable packages') { throw "Vulnerable package found" }
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan Git history for secrets
+        shell: powershell
+        run: |
+          $version = "8.30.1"
+          $archive = "gitleaks_${version}_windows_x64.zip"
+          $base = "https://github.com/gitleaks/gitleaks/releases/download/v$version"
+          Invoke-WebRequest "$base/$archive" -OutFile $archive
+          Invoke-WebRequest "$base/gitleaks_${version}_checksums.txt" -OutFile checksums.txt
+          $expected = ((Select-String -Path checksums.txt -Pattern "  $([regex]::Escape($archive))$").Line -split '\s+')[0]
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          if (-not $expected -or $actual -ne $expected) { throw "Gitleaks checksum mismatch" }
+          Expand-Archive $archive -DestinationPath gitleaks
+          .\gitleaks\gitleaks.exe git --redact --verbose

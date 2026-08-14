@@ -10,7 +10,7 @@ dotnet publish -c Release -r win-x64
 ```
 
 Готовые файлы: `bin/publish/TFG Launcher.exe` и
-`artifacts/TFG-Launcher-Setup-1.4.1.exe`.
+`artifacts/TFG-Launcher-Setup-1.4.2.exe`.
 
 Лаунчер хранит Java, Minecraft, сборку и настройки в `%LocalAppData%\TFGLauncher`.
 В окне «Настройки» можно изменить адрес Minecraft-сервера; по умолчанию используется
@@ -36,8 +36,8 @@ Credential Manager и поддерживает обычный выход и от
 GitHub Actions автоматически собирает Release при отправке тега `v*`:
 
 ```bash
-git tag v1.4.1
-git push origin main v1.4.1
+git tag v1.4.2
+git push origin main v1.4.2
 ```
 
 Перед первым релизом добавьте содержимое `update-private.pem` в GitHub Actions secret

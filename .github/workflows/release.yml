@@ -40,8 +40,8 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
           $launcher = "$env:LOCALAPPDATA\TFGLauncher\app\TFG Launcher.exe"
           if (-not (Test-Path $launcher)) { throw "Installed launcher was not found" }
-          & $launcher --self-test
-          if ($LASTEXITCODE -ne 0) { throw "Installed launcher self-test failed" }
+          $selfTest = Start-Process $launcher -ArgumentList "--self-test" -Wait -PassThru
+          if ($selfTest.ExitCode -ne 0) { throw "Installed launcher self-test failed with exit code $($selfTest.ExitCode)" }
       - name: Sign update
         shell: pwsh
         env:

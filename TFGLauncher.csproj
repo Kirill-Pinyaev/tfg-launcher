@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>TFGLauncher</RootNamespace>
     <AssemblyName>TFG Launcher</AssemblyName>
-    <Version>1.4.2</Version>
+    <Version>1.5.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -19,6 +19,5 @@
   <ItemGroup>
     <PackageReference Include="CmlLib.Core" Version="4.0.6" />
     <PackageReference Include="CmlLib.Core.Installer.Forge" Version="1.1.1" />
-    <EmbeddedResource Include="Assets/tfgauth-1.0.0.jar" LogicalName="TFGLauncher.tfgauth.jar" />
   </ItemGroup>
 </Project>

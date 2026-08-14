@@ -42,6 +42,14 @@ jobs:
           grep -q 'HTTP/.* 200' status-headers.txt
           grep -q 'HTTP/.* 403' auth-headers.txt
           ! grep -qi '^Access-Control-Allow-Origin:' auth-headers.txt
+          curl -sS -D skin-headers.txt -o skin-options.json -X OPTIONS "$STATUS_URL/api/v1/account/skin"
+          grep -q 'HTTP/.* 403' skin-headers.txt
+          ! grep -qi '^Access-Control-Allow-Origin:' skin-headers.txt
+          curl -fsS "$STATUS_URL/api/v1/versions" -o versions.json
+          curl -fsS "$STATUS_URL/api/v1/manifest" -o manifest.json
+          jq -e '.client.overlay.version >= 1 and (.client.overlay.sha256|length)==64' manifest.json
+          code=$(dd if=/dev/zero bs=17000 count=1 2>/dev/null | curl -sS -o oversized.json -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$STATUS_URL/api/v1/auth/login")
+          test "$code" = 400
           openssl s_client -connect tfg.kirillkatya.crazedns.ru:443 -servername tfg.kirillkatya.crazedns.ru </dev/null > tls.txt 2>&1
           grep -q 'Verify return code: 0 (ok)' tls.txt
       - uses: actions/upload-artifact@v4
@@ -55,4 +63,5 @@ jobs:
             private-ports.txt
             status-headers.txt
             auth-headers.txt
+            skin-headers.txt
             tls.txt

@@ -16,10 +16,14 @@ internal static partial class MemoryPolicy
 
     public static int DetectMaximumRamMb()
     {
+        return MaximumRamMb(TotalPhysicalBytes());
+    }
+
+    public static ulong TotalPhysicalBytes()
+    {
         var status = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
-        if (!GlobalMemoryStatusEx(ref status))
-            throw new InvalidOperationException("Не удалось определить объём оперативной памяти.");
-        return MaximumRamMb(status.TotalPhysical);
+        if (!GlobalMemoryStatusEx(ref status)) throw new InvalidOperationException("Не удалось определить объём оперативной памяти.");
+        return status.TotalPhysical;
     }
 
     internal static int MaximumRamMb(ulong totalBytes)
@@ -273,9 +277,6 @@ internal static class SelfTest
             service.EnsureDefaultServer();
             if (!Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(service.GameDirectory, "servers.dat")))
                     .Contains("192.168.1.78:25570")) throw new Exception("Configured server failed");
-            service.EnsureAuthMod();
-            using var authMod = ZipFile.OpenRead(Path.Combine(service.GameDirectory, "mods", "tfgauth-1.0.0.jar"));
-            if (authMod.GetEntry("META-INF/mods.toml") is null) throw new Exception("Embedded auth mod failed");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
         Console.WriteLine("Self-test passed.");

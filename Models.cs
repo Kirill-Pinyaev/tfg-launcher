@@ -22,6 +22,9 @@ internal sealed class InstallationState
     public string ForgeVersionName { get; set; } = "";
     public List<string> ManagedFiles { get; set; } = [];
     public Dictionary<string, string> ManagedHashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public int ClientOverlayVersion { get; set; }
+    public List<string> OverlayFiles { get; set; } = [];
+    public Dictionary<string, string> OverlayHashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 internal sealed record ServerStatus(
@@ -31,11 +34,17 @@ internal sealed record ServerStatus(
     string? PackVersion,
     string State = "offline",
     string Stage = "unknown",
-    DateTimeOffset? ExpectedUntil = null);
+    DateTimeOffset? ExpectedUntil = null,
+    bool AdmissionOpen = false,
+    bool EndpointReachable = false,
+    string? OperationId = null,
+    DateTimeOffset? HeartbeatAt = null);
 internal sealed record ReleaseAsset(string Name, long Size, string DownloadUrl, string Sha256);
 internal sealed record LauncherProgress(int Percent, string Message);
 internal sealed record RepairResult(bool Healthy, IReadOnlyList<string> DamagedFiles);
 internal sealed record LauncherUpdate(string Version, string InstallerUrl, string SignatureUrl, long Size, string Sha256);
+internal sealed record ClientOverlay(int Version, string DownloadUrl, string SignatureUrl, long Size, string Sha256,
+    IReadOnlyDictionary<string, string> Files);
 internal sealed record AuthSession(string Nickname, IReadOnlyList<string> Roles);
 internal sealed record GameTicket(string Ticket, string Nickname, DateTimeOffset ExpiresAt);
 
@@ -65,6 +74,27 @@ internal sealed class GameTicketResponse
     public string Nickname { get; set; } = "";
     [JsonPropertyName("expires_at")]
     public DateTimeOffset ExpiresAt { get; set; }
+}
+
+internal sealed class SkinStateResponse
+{
+    [JsonPropertyName("nickname")] public string Nickname { get; set; } = "";
+    [JsonPropertyName("skin")] public SkinState? Skin { get; set; }
+}
+
+internal sealed class SkinState
+{
+    [JsonPropertyName("source")] public string Source { get; set; } = "";
+    [JsonPropertyName("value")] public string? Value { get; set; }
+    [JsonPropertyName("variant")] public string Variant { get; set; } = "classic";
+    [JsonPropertyName("has_preview")] public bool HasPreview { get; set; }
+}
+
+internal sealed class SkinJobResponse
+{
+    [JsonPropertyName("job_id")] public string JobId { get; set; } = "";
+    [JsonPropertyName("status")] public string Status { get; set; } = "";
+    [JsonPropertyName("error")] public string? Error { get; set; }
 }
 
 internal sealed class GitHubRelease

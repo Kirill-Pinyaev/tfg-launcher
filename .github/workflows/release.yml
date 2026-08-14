@@ -32,6 +32,12 @@ jobs:
       - name: Build installer
         shell: powershell
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\TFGLauncher.iss'
+      - name: Build client overlay
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force artifacts\client-overlay\mods | Out-Null
+          Copy-Item Assets\tfgauth-1.0.0.jar artifacts\client-overlay\mods\tfgauth-1.0.0.jar
+          Compress-Archive -Path artifacts\client-overlay\* -DestinationPath "artifacts\TFG-Client-Overlay-1.zip"
       - name: Install on clean Windows runner
         shell: powershell
         run: |
@@ -48,18 +54,19 @@ jobs:
           TFG_UPDATE_SIGNING_KEY: ${{ secrets.TFG_UPDATE_SIGNING_KEY }}
         run: |
           if (-not $env:TFG_UPDATE_SIGNING_KEY) { throw "Repository secret TFG_UPDATE_SIGNING_KEY is missing" }
-          $file = Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe"
           $pem = $env:TFG_UPDATE_SIGNING_KEY.Replace('\n', "`n")
           $base64 = $pem -replace '-----BEGIN PRIVATE KEY-----', '' -replace '-----END PRIVATE KEY-----', '' -replace '\s', ''
           $privateKey = [Convert]::FromBase64String($base64)
           $key = [System.Security.Cryptography.ECDsa]::Create()
           $bytesRead = 0
           $key.ImportPkcs8PrivateKey($privateKey, [ref]$bytesRead)
-          $signature = $key.SignData(
-            [System.IO.File]::ReadAllBytes($file.FullName),
-            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
-            [System.Security.Cryptography.DSASignatureFormat]::Rfc3279DerSequence)
-          [System.IO.File]::WriteAllBytes("$($file.FullName).sig", $signature)
+          foreach ($file in Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe", "artifacts\TFG-Client-Overlay-1.zip") {
+            $signature = $key.SignData(
+              [System.IO.File]::ReadAllBytes($file.FullName),
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+              [System.Security.Cryptography.DSASignatureFormat]::Rfc3279DerSequence)
+            [System.IO.File]::WriteAllBytes("$($file.FullName).sig", $signature)
+          }
           $key.Dispose()
       - name: Verify update signature with launcher code
         shell: powershell
@@ -67,14 +74,18 @@ jobs:
           $file = Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe"
           dotnet run --project TFGLauncher.csproj -c Release -- --verify-update $file.FullName "$($file.FullName).sig"
           if ($LASTEXITCODE -ne 0) { throw "Launcher rejected update signature" }
+          $overlay = Get-Item "artifacts\TFG-Client-Overlay-1.zip"
+          dotnet run --project TFGLauncher.csproj -c Release -- --verify-update $overlay.FullName "$($overlay.FullName).sig"
+          if ($LASTEXITCODE -ne 0) { throw "Launcher rejected overlay signature" }
       - name: Write SHA-256
         shell: powershell
         run: |
-          $file = Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe"
-          $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
-          "$hash  $($file.Name)" | Set-Content -Encoding ascii artifacts\SHA256SUMS.txt
+          Get-Item "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe", "artifacts\TFG-Client-Overlay-1.zip" | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii artifacts\SHA256SUMS.txt
       - name: Create GitHub Release
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe" "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe.sig" artifacts\SHA256SUMS.txt --verify-tag --generate-notes --title "TFG Launcher $env:TFG_VERSION"
+        run: gh release create $env:GITHUB_REF_NAME "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe" "artifacts\TFG-Launcher-Setup-$env:TFG_VERSION.exe.sig" "artifacts\TFG-Client-Overlay-1.zip" "artifacts\TFG-Client-Overlay-1.zip.sig" artifacts\SHA256SUMS.txt --verify-tag --generate-notes --title "TFG Launcher $env:TFG_VERSION"

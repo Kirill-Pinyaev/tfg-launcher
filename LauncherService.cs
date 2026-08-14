@@ -24,6 +24,7 @@ internal sealed class LauncherService
     public const string InitialPackVersion = "0.13.7";
     public const int CurrentPackageRevision = 3;
     public const string ApiBaseUrl = "https://tfg.kirillkatya.crazedns.ru";
+    public const string LanApiBaseUrl = "http://192.168.1.78:8090";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly string[] ProtectedFiles = ["options.txt", "servers.dat"];
@@ -36,6 +37,7 @@ internal sealed class LauncherService
     private string StatePath => Path.Combine(RootDirectory, "installation.json");
     private string LogPath => Path.Combine(RootDirectory, "launcher.log");
     private string AuthTicketPath => Path.Combine(GameDirectory, ".tfg-auth-ticket");
+    private string StatusCachePath => Path.Combine(RootDirectory, "status-cache.json");
 
     public LauncherService(string? rootDirectory = null)
     {
@@ -134,6 +136,54 @@ internal sealed class LauncherService
         return new GameTicket(result.Ticket, result.Nickname, result.ExpiresAt);
     }
 
+    public async Task<SkinStateResponse> GetSkinAsync(CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load() ?? throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        using var request = AuthRequest(HttpMethod.Get, "/api/v1/account/skin", credential.Token);
+        using var response = await http.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<SkinStateResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Пустой ответ skin API.");
+    }
+
+    public async Task<byte[]?> GetSkinPreviewAsync(CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load() ?? throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        using var request = AuthRequest(HttpMethod.Get, "/api/v1/account/skin/content", credential.Token);
+        using var response = await http.SendAsync(request, token);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsByteArrayAsync(token);
+    }
+
+    public async Task<string> ApplySkinAsync(string source, string? value, bool slim, byte[]? png, CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load() ?? throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        using var request = AuthRequest(HttpMethod.Post, "/api/v1/account/skin", credential.Token);
+        request.Content = JsonContent.Create(new
+        {
+            source,
+            value,
+            variant = slim ? "slim" : "classic",
+            png_base64 = png is null ? null : Convert.ToBase64String(png)
+        });
+        using var response = await http.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<SkinJobResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Пустой ответ skin API.");
+        return result.JobId;
+    }
+
+    public async Task<SkinJobResponse> GetSkinJobAsync(string id, CancellationToken token = default)
+    {
+        var credential = CredentialStore.Load() ?? throw new InvalidOperationException("Сначала войдите в аккаунт.");
+        using var request = AuthRequest(HttpMethod.Get, $"/api/v1/account/skin/jobs/{Uri.EscapeDataString(id)}", credential.Token);
+        using var response = await http.SendAsync(request, token);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<SkinJobResponse>(cancellationToken: token)
+            ?? throw new InvalidDataException("Пустой ответ skin API.");
+    }
+
     private static HttpRequestMessage AuthRequest(HttpMethod method, string path, string token)
     {
         var request = new HttpRequestMessage(method, $"{ApiBaseUrl}{path}");
@@ -146,36 +196,63 @@ internal sealed class LauncherService
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        ServerStatus authoritative;
+        try { authoritative = await CheckStatusApiAsync(ApiBaseUrl, timeout.Token); }
+        catch
+        {
+            try { authoritative = await CheckStatusApiAsync(LanApiBaseUrl, timeout.Token); }
+            catch { authoritative = LoadCachedStatus(); }
+        }
         var endpoint = GetServerEndpoint();
-        if (endpoint.Host == ServerHost && endpoint.Port == ServerPort)
-            return await CheckStatusApiAsync(timeout.Token);
-        try { return await ServerPing.QueryAsync(endpoint.Host, endpoint.Port, timeout.Token); }
-        catch { return new ServerStatus(false, 0, 0, null); }
+        var endpointReachable = false;
+        try { endpointReachable = (await ServerPing.QueryAsync(endpoint.Host, endpoint.Port, timeout.Token)).Online; }
+        catch { }
+        return authoritative with
+        {
+            EndpointReachable = endpointReachable,
+            Online = authoritative.State == "online" && authoritative.Stage == "ready" &&
+                     authoritative.AdmissionOpen && endpointReachable
+        };
     }
 
-    private async Task<ServerStatus> CheckStatusApiAsync(CancellationToken token)
+    private async Task<ServerStatus> CheckStatusApiAsync(string baseUrl, CancellationToken token)
+    {
+        using var response = await http.GetAsync($"{baseUrl}/api/v1/status", token);
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(token);
+        var parsed = ParseStatus(json);
+        SaveBytesAtomic(StatusCachePath, Encoding.UTF8.GetBytes(json));
+        return parsed;
+    }
+
+    private ServerStatus LoadCachedStatus()
     {
         try
         {
-            using var response = await http.GetAsync($"{ApiBaseUrl}/api/v1/status", token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(token);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
-            var root = document.RootElement;
-            var minecraft = root.GetProperty("minecraft");
-            var state = root.TryGetProperty("state", out var stateValue) ? stateValue.GetString() ?? "offline" : "offline";
-            var stage = root.TryGetProperty("stage", out var stageValue) ? stageValue.GetString() ?? "unknown" : "unknown";
-            DateTimeOffset? expectedUntil = null;
-            if (root.TryGetProperty("expected_until", out var expected) && expected.ValueKind == JsonValueKind.String &&
-                DateTimeOffset.TryParse(expected.GetString(), out var parsed)) expectedUntil = parsed;
-            return new ServerStatus(
-                minecraft.GetProperty("reachable").GetBoolean(),
-                minecraft.GetProperty("players_online").GetInt32(),
-                minecraft.GetProperty("players_max").GetInt32(),
-                root.TryGetProperty("installed_version", out var version) ? version.GetString() : null,
-                state, stage, expectedUntil);
+            var cached = ParseStatus(File.ReadAllText(StatusCachePath));
+            if (cached.ExpectedUntil is { } until && until > DateTimeOffset.Now) return cached;
         }
-        catch { return new ServerStatus(false, 0, 0, null); }
+        catch { }
+        return new ServerStatus(false, 0, 0, null);
+    }
+
+    private static ServerStatus ParseStatus(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var minecraft = root.GetProperty("minecraft");
+        static string Text(JsonElement root, string name, string fallback) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? fallback : fallback;
+        DateTimeOffset? expected = root.TryGetProperty("expected_until", out var until) && until.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(until.GetString(), out var parsedUntil) ? parsedUntil : null;
+        DateTimeOffset? heartbeat = root.TryGetProperty("heartbeat_at", out var beat) && beat.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(beat.GetString(), out var parsedBeat) ? parsedBeat : null;
+        return new ServerStatus(false,
+            minecraft.GetProperty("players_online").GetInt32(), minecraft.GetProperty("players_max").GetInt32(),
+            root.TryGetProperty("installed_version", out var version) ? version.GetString() : null,
+            Text(root, "state", "offline"), Text(root, "stage", "unknown"), expected,
+            root.TryGetProperty("admission_open", out var admission) && admission.ValueKind == JsonValueKind.True,
+            false, root.TryGetProperty("operation_id", out var operation) ? operation.GetString() : null, heartbeat);
     }
 
     public async Task<LauncherUpdate?> GetRequiredLauncherUpdateAsync(string currentVersion, CancellationToken token = default)
@@ -218,6 +295,100 @@ internal sealed class LauncherService
             throw new InvalidDataException("Криптографическая подпись обновления лаунчера недействительна.");
         }
         return path;
+    }
+
+    public async Task<ClientOverlay> GetClientOverlayAsync(CancellationToken token = default)
+    {
+        using var response = await http.GetAsync($"{ApiBaseUrl}/api/v1/manifest", token);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+        var overlay = document.RootElement.GetProperty("client").GetProperty("overlay");
+        var files = overlay.GetProperty("files").EnumerateObject().ToDictionary(x => x.Name, x => x.Value.GetString() ?? "",
+            StringComparer.OrdinalIgnoreCase);
+        var result = new ClientOverlay(
+            overlay.GetProperty("version").GetInt32(), overlay.GetProperty("url").GetString() ?? "",
+            overlay.GetProperty("signature_url").GetString() ?? "", overlay.GetProperty("size").GetInt64(),
+            overlay.GetProperty("sha256").GetString() ?? "", files);
+        if (!IsHttps(result.DownloadUrl) || !IsHttps(result.SignatureUrl) || result.Size <= 0 || result.Files.Count == 0)
+            throw new InvalidDataException("Манифест обязательного client overlay некорректен.");
+        return result;
+    }
+
+    public async Task EnsureClientOverlayAsync(IProgress<LauncherProgress>? progress = null, CancellationToken token = default)
+    {
+        var overlay = await GetClientOverlayAsync(token);
+        var state = LoadState();
+        if (state.ClientOverlayVersion == overlay.Version && overlay.Files.All(item =>
+                File.Exists(SafePath.Resolve(GameDirectory, item.Key)) &&
+                ComputeSha256(SafePath.Resolve(GameDirectory, item.Key)).Equals(item.Value, StringComparison.OrdinalIgnoreCase))) return;
+        var work = Path.Combine(RootDirectory, $".overlay-{Guid.NewGuid():N}");
+        var zip = Path.Combine(work, "overlay.zip");
+        var staging = Path.Combine(work, "staging");
+        Directory.CreateDirectory(staging);
+        try
+        {
+            progress?.Report(new LauncherProgress(94, "Загрузка обязательных клиентских файлов..."));
+            await DownloadAsync(overlay.DownloadUrl, zip, ("sha256", overlay.Sha256), null, token);
+            if (new FileInfo(zip).Length != overlay.Size || !UpdateSignature.Verify(zip, await DownloadSignatureAsync(overlay.SignatureUrl, token)))
+                throw new InvalidDataException("Подпись client overlay недействительна.");
+            using (var archive = ZipFile.OpenRead(zip))
+                foreach (var entry in archive.Entries.Where(x => !x.FullName.EndsWith('/')))
+                {
+                    var destination = SafePath.Resolve(staging, entry.FullName);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    entry.ExtractToFile(destination, true);
+                }
+            foreach (var item in overlay.Files)
+            {
+                var source = SafePath.Resolve(staging, item.Key);
+                if (!File.Exists(source) || !ComputeSha256(source).Equals(item.Value, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"Повреждён файл client overlay: {item.Key}");
+            }
+            CommitOverlay(staging, overlay, state);
+        }
+        finally { try { Directory.Delete(work, true); } catch { } }
+    }
+
+    private void CommitOverlay(string staging, ClientOverlay overlay, InstallationState state)
+    {
+        var affected = state.OverlayFiles.Concat(overlay.Files.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var backup = Path.Combine(RootDirectory, $".overlay-backup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(backup);
+        try
+        {
+            foreach (var relative in affected)
+            {
+                var target = SafePath.Resolve(GameDirectory, relative);
+                if (!File.Exists(target)) continue;
+                var saved = SafePath.Resolve(backup, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(saved)!);
+                File.Move(target, saved, true);
+            }
+            foreach (var relative in overlay.Files.Keys)
+            {
+                var target = SafePath.Resolve(GameDirectory, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Move(SafePath.Resolve(staging, relative), target, true);
+            }
+            state.ClientOverlayVersion = overlay.Version;
+            state.OverlayFiles = overlay.Files.Keys.ToList();
+            state.OverlayHashes = overlay.Files.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+            SaveJsonAtomic(StatePath, state);
+        }
+        catch
+        {
+            foreach (var relative in affected)
+            {
+                try { File.Delete(SafePath.Resolve(GameDirectory, relative)); } catch { }
+                var saved = SafePath.Resolve(backup, relative);
+                if (!File.Exists(saved)) continue;
+                var target = SafePath.Resolve(GameDirectory, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Move(saved, target, true);
+            }
+            throw;
+        }
+        try { Directory.Delete(backup, true); } catch { }
     }
 
     private async Task<byte[]> DownloadSignatureAsync(string url, CancellationToken token)
@@ -331,7 +502,6 @@ internal sealed class LauncherService
 
     public async Task<RepairResult> VerifyInstallationAsync(CancellationToken token = default)
     {
-        EnsureAuthMod();
         var state = LoadState();
         if (state.ManagedFiles.Count == 0 || state.ManagedHashes.Count == 0)
             return new RepairResult(false, ["Манифест установленной сборки отсутствует"]);
@@ -345,6 +515,12 @@ internal sealed class LauncherService
             var actual = Convert.ToHexString(await SHA256.HashDataAsync(file, token));
             if (!state.ManagedHashes.TryGetValue(relative, out var expected) ||
                 !actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) damaged.Add(relative);
+        }
+        foreach (var relative in state.OverlayFiles)
+        {
+            var path = SafePath.Resolve(GameDirectory, relative);
+            if (!File.Exists(path) || !state.OverlayHashes.TryGetValue(relative, out var expected) ||
+                !ComputeSha256(path).Equals(expected, StringComparison.OrdinalIgnoreCase)) damaged.Add(relative);
         }
         return new RepairResult(damaged.Count == 0, damaged);
     }
@@ -362,6 +538,18 @@ internal sealed class LauncherService
             foreach (var crash in Directory.EnumerateFiles(crashDirectory, "*.txt").OrderByDescending(File.GetLastWriteTimeUtc).Take(3))
                 AddDiagnosticFile(archive, crash, $"minecraft/crash-reports/{Path.GetFileName(crash)}");
         var state = LoadState();
+        var java = Directory.Exists(GameDirectory)
+            ? Directory.EnumerateFiles(GameDirectory, "javaw.exe", SearchOption.AllDirectories).FirstOrDefault()
+            : null;
+        string? javaVersion = null;
+        if (java is not null)
+            try
+            {
+                using var process = Process.Start(new ProcessStartInfo(java, "-version")
+                { UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true });
+                if (process is not null && process.WaitForExit(5000)) javaVersion = process.StandardError.ReadToEnd();
+            }
+            catch { }
         var entry = archive.CreateEntry("diagnostic.json", CompressionLevel.Optimal);
         using var writer = new StreamWriter(entry.Open());
         writer.Write(JsonSerializer.Serialize(new
@@ -373,8 +561,13 @@ internal sealed class LauncherService
                 state.MinecraftVersion,
                 state.ForgeVersion,
                 state.PackageRevision,
+                state.ClientOverlayVersion,
                 managed_files = state.ManagedFiles.Count
             },
+            memory = new { physical_bytes = MemoryPolicy.TotalPhysicalBytes(), selected_xmx_mb = MemoryPolicy.DetectMaximumRamMb() },
+            java = new { path = java, version = javaVersion },
+            server = GetServerEndpoint().Address,
+            status_cache = File.Exists(StatusCachePath) ? File.ReadAllText(StatusCachePath) : null,
             os = Environment.OSVersion.ToString(),
             is_64_bit = Environment.Is64BitOperatingSystem,
             error = error?.ToString(),
@@ -392,7 +585,8 @@ internal sealed class LauncherService
     {
         if (!InputRules.IsValidNickname(ticket.Nickname) || string.IsNullOrWhiteSpace(ticket.Ticket))
             throw new InvalidDataException("Сервер авторизации вернул некорректный билет входа.");
-        EnsureAuthMod();
+        if (LoadState().ClientOverlayVersion <= 0)
+            throw new InvalidOperationException("Обязательный client overlay не установлен.");
         var process = await BuildProcessAsync(ticket.Nickname, maximumRamMb, token);
         SaveBytesAtomic(AuthTicketPath, Encoding.UTF8.GetBytes(ticket.Ticket));
         process.EnableRaisingEvents = true;
@@ -406,21 +600,6 @@ internal sealed class LauncherService
             try { File.Delete(AuthTicketPath); } catch { }
             throw;
         }
-    }
-
-    internal void EnsureAuthMod()
-    {
-        var destination = Path.Combine(GameDirectory, "mods", "tfgauth-1.0.0.jar");
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        using var source = typeof(LauncherService).Assembly.GetManifestResourceStream("TFGLauncher.tfgauth.jar")
-            ?? throw new InvalidOperationException("В лаунчере отсутствует обязательный мод авторизации.");
-        var temporary = destination + ".tmp";
-        try
-        {
-            using (var output = File.Create(temporary)) source.CopyTo(output);
-            File.Move(temporary, destination, true);
-        }
-        finally { try { File.Delete(temporary); } catch { } }
     }
 
     internal async Task<Process> BuildProcessAsync(

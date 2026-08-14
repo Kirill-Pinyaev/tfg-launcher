@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private Process? gameProcess;
     private AuthSession? authSession;
     private bool updateBlocked;
+    private bool busy;
 
     public MainForm()
     {
@@ -123,7 +124,7 @@ internal sealed class MainForm : Form
             button.ForeColor = Color.WhiteSmoke;
         }
         skinButton.Text = "СКИН";
-        skinButton.Click += (_, _) => new SkinForm().ShowDialog(this);
+        skinButton.Click += (_, _) => new SkinForm(service).ShowDialog(this);
         repairButton.Text = "ПРОВЕРИТЬ";
         repairButton.Click += async (_, _) => await RepairAsync(true);
         diagnosticsButton.Text = "ДИАГНОСТИКА";
@@ -139,6 +140,7 @@ internal sealed class MainForm : Form
         playButton.Text = "ИГРАТЬ";
         playButton.Cursor = Cursors.Hand;
         playButton.Click += async (_, _) => await PlayAsync();
+        playButton.Enabled = false;
 
         progressBar.Location = new Point(35, 416);
         progressBar.Size = new Size(430, 8);
@@ -192,6 +194,7 @@ internal sealed class MainForm : Form
             : ServerStateText(serverStatus);
         serverLabel.ForeColor = serverStatus.Online ? Color.FromArgb(111, 207, 151) : Color.FromArgb(220, 100, 100);
         UpdateVersionLabel();
+        UpdatePlayEnabled();
     }
 
     private static string ServerStateText(ServerStatus status) => status.State switch
@@ -298,12 +301,23 @@ internal sealed class MainForm : Form
         revokeButton.Visible = loggedIn;
         nicknameBox.ReadOnly = loggedIn;
         passwordBox.Enabled = !loggedIn;
+        skinButton.Enabled = loggedIn && !busy;
+        UpdatePlayEnabled();
     }
+
+    private void UpdatePlayEnabled() => playButton.Enabled = !busy && !updateBlocked && authSession is not null && serverStatus.Online;
 
     private async Task PlayAsync()
     {
         if (gameProcess is { HasExited: false }) return;
         if (authSession is null && !await AuthenticateAsync()) return;
+        serverStatus = await service.GetServerStatusAsync();
+        if (!serverStatus.Online)
+        {
+            MessageBox.Show(ServerStateText(serverStatus), "Сервер не готов", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UpdatePlayEnabled();
+            return;
+        }
         var nickname = authSession!.Nickname;
         if (!InputRules.IsValidNickname(nickname))
         {
@@ -348,6 +362,15 @@ internal sealed class MainForm : Form
             }
             else if (!await RepairAsync(false)) return;
 
+            await service.EnsureClientOverlayAsync(new Progress<LauncherProgress>(value =>
+            {
+                progressBar.Value = Math.Clamp(value.Percent, 0, 100);
+                statusLabel.Text = value.Message;
+            }));
+
+            serverStatus = await service.GetServerStatusAsync();
+            if (!serverStatus.Online) throw new InvalidOperationException("Сервер закрыл вход на время обслуживания.");
+
             statusLabel.Text = "Получение одноразового билета входа...";
             var ticket = await service.CreateGameTicketAsync();
             if (!string.Equals(ticket.Nickname, nickname, StringComparison.Ordinal))
@@ -375,12 +398,12 @@ internal sealed class MainForm : Form
 
     private void SetBusy(bool busy, string status)
     {
-        playButton.Enabled = !busy;
+        this.busy = busy;
         nicknameBox.Enabled = !busy;
         passwordBox.Enabled = !busy && authSession is null;
         authButton.Enabled = !busy;
         revokeButton.Enabled = !busy;
-        skinButton.Enabled = !busy;
+        skinButton.Enabled = !busy && authSession is not null;
         repairButton.Enabled = !busy;
         diagnosticsButton.Enabled = !busy;
         settingsButton.Enabled = !busy;
@@ -389,6 +412,7 @@ internal sealed class MainForm : Form
         if (!busy) progressBar.Value = 0;
         statusLabel.Text = status;
         UseWaitCursor = busy;
+        UpdatePlayEnabled();
     }
 
     private async Task<bool> RepairAsync(bool showHealthy)

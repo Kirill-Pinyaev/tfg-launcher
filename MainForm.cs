@@ -360,7 +360,6 @@ internal sealed class MainForm : Form
                 await service.InstallPackAsync(target, asset, progress);
                 UpdateVersionLabel();
             }
-            else if (!await RepairAsync(false)) return;
 
             await service.EnsureClientOverlayAsync(new Progress<LauncherProgress>(value =>
             {

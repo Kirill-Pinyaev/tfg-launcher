@@ -21,11 +21,13 @@ jobs:
       - name: Scan common TCP ports
         run: nmap -Pn -sT --top-ports 1000 --reason --open "$TARGET" -oN external-tcp.txt
       - name: Verify intended Minecraft exposure
+        if: always()
         run: |
           nmap -Pn -sT -p25565 --reason "$TARGET" -oN minecraft-tcp.txt
           grep -Eq '^25565/tcp[[:space:]]+open' minecraft-tcp.txt
           sudo nmap -Pn -sU -p24454 --reason "$TARGET" -oN voice-udp.txt
       - name: Verify private services are closed
+        if: always()
         run: |
           nmap -Pn -sT -p5433,8080,8084,8090,8091,25575 --reason "$TARGET" -oN private-ports.txt
           if grep -Eq '^(5433|8080|8084|8090|8091|25575)/tcp[[:space:]]+open' private-ports.txt; then
@@ -33,6 +35,7 @@ jobs:
             exit 1
           fi
       - name: Check HTTPS and auth CORS
+        if: always()
         run: |
           curl -fsS -D status-headers.txt -o status.json "$STATUS_URL/api/v1/status"
           curl -sS -D auth-headers.txt -o auth-options.json -X OPTIONS "$STATUS_URL/api/v1/auth/login"

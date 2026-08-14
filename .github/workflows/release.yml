@@ -31,7 +31,7 @@ jobs:
         run: dotnet publish TFGLauncher.csproj -c Release -o bin/publish
       - name: Build installer
         shell: powershell
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\TFGLauncher.iss'
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:TFG_VERSION" installer\TFGLauncher.iss'
       - name: Build client overlay
         shell: powershell
         run: |

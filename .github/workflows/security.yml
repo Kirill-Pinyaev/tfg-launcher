@@ -28,8 +28,8 @@ jobs:
         run: |
           Set-Content -Encoding ascii forged.bin "forged"
           [IO.File]::WriteAllBytes("forged.sig", (1..72))
-          dotnet run --project TFGLauncher.csproj -c Release --no-build -- --verify-update forged.bin forged.sig
-          if ($LASTEXITCODE -eq 0) { throw "Forged signature was accepted" }
+          $process = Start-Process dotnet -ArgumentList "run --project TFGLauncher.csproj -c Release --no-build -- --verify-update forged.bin forged.sig" -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -eq 0) { throw "Forged signature was accepted" }
       - name: Vulnerable dependencies
         shell: powershell
         run: |
